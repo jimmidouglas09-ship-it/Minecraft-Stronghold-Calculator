@@ -211,20 +211,20 @@ LRESULT CALLBACK OverlayProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
 
         // Show validation error if present
         if (appState.distanceValidationFailed) {
-            graphics.DrawString(L"? DISTANCE MISMATCH!", -1, &smallFont,
+            graphics.DrawString(L"⚠ DISTANCE MISMATCH!", -1, &smallFont,
                 PointF((REAL)x, (REAL)y), &redBrush);
             y += 18;
         }
 
         // Show current phase
         if (appState.capturePhase == 1) {
-            graphics.DrawString(L"? Press direction key at 2nd point", -1, &smallFont,
+            graphics.DrawString(L"→ Press direction key at 2nd point", -1, &smallFont,
                 PointF((REAL)x, (REAL)y), &orangeBrush);
             y += 18;
         }
         else if (appState.capturePhase == 2 && !strongholdCandidates.empty()) {
             std::wstringstream ss;
-            ss << L"Direction: " << std::fixed << std::setprecision(1) << appState.lastAngle << L"�";
+            ss << L"Direction: " << std::fixed << std::setprecision(1) << appState.lastAngle << L"°";
             graphics.DrawString(ss.str().c_str(), -1, &infoFont,
                 PointF((REAL)x, (REAL)y), &lightGrayBrush);
             y += 22;
@@ -288,11 +288,11 @@ LRESULT CALLBACK OverlayProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
             }
 
             y += 8;
-            graphics.DrawString(L"Drag to move � Reset with hotkey", -1, &smallFont,
+            graphics.DrawString(L"Drag to move • Reset with hotkey", -1, &smallFont,
                 PointF((REAL)x, (REAL)y), &lightGrayBrush);
         }
         else if (appState.capturePhase == 0 && appState.f4PressedFirst) {
-            graphics.DrawString(L"? Now press direction key twice", -1, &smallFont,
+            graphics.DrawString(L"→ Now press direction key twice", -1, &smallFont,
                 PointF((REAL)x, (REAL)y), &orangeBrush);
         }
 
