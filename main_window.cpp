@@ -4,12 +4,87 @@
 #include "stronghold_calculator.h"
 #include "distance_calculator.h"
 #include "overlay_window.h"
+#include <fstream>
+#include <shlobj.h>
 
 // Global variables for hotkey customization
 int currentTabHotkey = VK_TAB;
 int currentF4Hotkey = VK_F4;
 bool waitingForTabHotkey = false;
 bool waitingForF4Hotkey = false;
+
+// Configuration file functions
+std::wstring GetConfigFilePath() {
+    wchar_t* appDataPath;
+    if (SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, NULL, &appDataPath) == S_OK) {
+        std::wstring configPath = std::wstring(appDataPath) + L"\\MinecraftStrongholdFinder";
+
+        // Create directory if it doesn't exist
+        CreateDirectory(configPath.c_str(), NULL);
+
+        configPath += L"\\config.ini";
+        CoTaskMemFree(appDataPath);
+        return configPath;
+    }
+
+    // Fallback to current directory if AppData is not available
+    return L"config.ini";
+}
+
+void SaveHotkeysToFile() {
+    std::wstring configPath = GetConfigFilePath();
+    std::wofstream file(configPath);
+
+    if (file.is_open()) {
+        file << L"[Hotkeys]\n";
+        file << L"DirectionKey=" << currentTabHotkey << L"\n";
+        file << L"DistanceKey=" << currentF4Hotkey << L"\n";
+        file.close();
+    }
+}
+
+void LoadHotkeysFromFile() {
+    std::wstring configPath = GetConfigFilePath();
+    std::wifstream file(configPath);
+
+    if (file.is_open()) {
+        std::wstring line;
+        while (std::getline(file, line)) {
+            // Skip empty lines and comments
+            if (line.empty() || line[0] == L'#' || line[0] == L';' || line[0] == L'[') {
+                continue;
+            }
+
+            // Find the '=' separator
+            size_t equalPos = line.find(L'=');
+            if (equalPos != std::wstring::npos) {
+                std::wstring key = line.substr(0, equalPos);
+                std::wstring value = line.substr(equalPos + 1);
+
+                // Remove whitespace
+                key.erase(0, key.find_first_not_of(L" \t"));
+                key.erase(key.find_last_not_of(L" \t") + 1);
+                value.erase(0, value.find_first_not_of(L" \t"));
+                value.erase(value.find_last_not_of(L" \t") + 1);
+
+                try {
+                    int keyCode = std::stoi(value);
+
+                    if (key == L"DirectionKey") {
+                        currentTabHotkey = keyCode;
+                    }
+                    else if (key == L"DistanceKey") {
+                        currentF4Hotkey = keyCode;
+                    }
+                }
+                catch (const std::exception&) {
+                    // Invalid number in config, keep default value
+                }
+            }
+        }
+        file.close();
+    }
+}
 
 void CopyStrongholdResultsToClipboard() {
     std::wstringstream ss;
@@ -31,7 +106,7 @@ void CopyStrongholdResultsToClipboard() {
         }
     }
     else {
-        ss << L"Angle: " << appState.lastAngle << L"° - No strongholds found";
+        ss << L"Angle: " << appState.lastAngle << L"Â° - No strongholds found";
     }
     std::wstring text = ss.str();
 
@@ -104,6 +179,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             if (newKey != VK_ESCAPE && newKey != currentF4Hotkey) {
                 currentTabHotkey = newKey;
                 RegisterHotkeys(hWnd);
+                SaveHotkeysToFile(); // Save to file when changed
             }
             waitingForTabHotkey = false;
             SetFocus(hWnd); // Remove focus from any button
@@ -115,6 +191,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             if (newKey != VK_ESCAPE && newKey != currentTabHotkey) {
                 currentF4Hotkey = newKey;
                 RegisterHotkeys(hWnd);
+                SaveHotkeysToFile(); // Save to file when changed
             }
             waitingForF4Hotkey = false;
             SetFocus(hWnd); // Remove focus from any button
@@ -324,7 +401,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         else if (appState.capturePhase == 2) {
             std::wstringstream angleSS;
             angleSS << L"Eye Direction: " << std::fixed << std::setprecision(1)
-                << appState.lastAngle << L"°\n";
+                << appState.lastAngle << L"Â°\n";
 
             if (!strongholdCandidates.empty()) {
                 angleSS << L"\nStronghold Locations (Overworld / Nether):";
@@ -388,6 +465,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 
     case WM_CREATE:
     {
+        // Load hotkeys from file at startup
+        LoadHotkeysFromFile();
+
         // Create hotkey change buttons - positioned after hotkey text
         CreateWindow(L"BUTTON", L"Change Direction Key", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
             300, 55, 140, 25, hWnd, (HMENU)1001, GetModuleHandle(NULL), NULL);
@@ -395,7 +475,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         CreateWindow(L"BUTTON", L"Change Distance Key", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
             300, 75, 140, 25, hWnd, (HMENU)1002, GetModuleHandle(NULL), NULL);
 
-        // Register initial hotkeys
+        // Register hotkeys (now using loaded values)
         RegisterHotkeys(hWnd);
     }
     break;
