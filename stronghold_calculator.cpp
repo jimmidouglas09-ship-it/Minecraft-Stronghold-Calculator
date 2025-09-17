@@ -1,5 +1,10 @@
+// Enhanced stronghold calculator with uncertainty handling and Bedrock eye position fix
 #define NOMINMAX
 #include "stronghold_calculator.h"
+#include <map>
+#include <algorithm>
+#include <cmath>
+#include <vector>
 
 // Distance probabilities from the HTML version
 std::map<int, double> distanceProbabilities = {
@@ -10,8 +15,40 @@ std::map<int, double> distanceProbabilities = {
     {2800, 0.0258}, {3000, 0.0171}, {3100, 0.0169}, {3200, 0.0189}
 };
 
+// Standard deviation for angle measurements (in degrees)
+const double ANGLE_STD_DEV = 2.0; // Adjustable based on measurement precision
+// Standard deviation for F4 distance measurements (in blocks)
+const double F4_DISTANCE_STD_DEV = 25.0; // Adjustable based on F4 precision
+
 std::vector<StrongholdCell> strongholdCells;
 std::vector<StrongholdCandidate> strongholdCandidates;
+
+// Helper function to calculate Gaussian probability
+double gaussianProbability(double x, double mean, double stdDev) {
+    if (stdDev <= 0) return 0.0;
+    double exponent = -0.5 * std::pow((x - mean) / stdDev, 2);
+    return std::exp(exponent) / (stdDev * std::sqrt(2.0 * M_PI));
+}
+
+// Generate multiple angle samples for uncertainty
+std::vector<double> generateAngleSamples(double centerAngle, int numSamples = 5) {
+    std::vector<double> angles;
+    for (int i = 0; i < numSamples; i++) {
+        double offset = (i - numSamples / 2) * (ANGLE_STD_DEV / 2.0);
+        angles.push_back(centerAngle + offset);
+    }
+    return angles;
+}
+
+// Generate distance samples for F4 uncertainty
+std::vector<double> generateDistanceSamples(double centerDistance, int numSamples = 5) {
+    std::vector<double> distances;
+    for (int i = 0; i < numSamples; i++) {
+        double offset = (i - numSamples / 2) * (F4_DISTANCE_STD_DEV / 2.0);
+        distances.push_back(std::max(0.0, centerDistance + offset));
+    }
+    return distances;
+}
 
 void generateStrongholdCells() {
     strongholdCells.clear();
@@ -85,9 +122,9 @@ void calculateStrongholdLocationWithDistance(double playerX, double playerZ, dou
     appState.distanceValidationFailed = false;
     appState.validationErrorMessage = L"";
 
-    double angleRad = eyeAngle * M_PI / 180.0;
-    double dx = std::sin(angleRad);
-    double dz = -std::cos(angleRad);
+    // BEDROCK FIX: Eye of ender starts flying from (playerX + 0.5, playerZ + 0.5)
+    double eyeStartX = playerX + 0.5;
+    double eyeStartZ = playerZ + 0.5;
 
     // Use F4 distance if F4 was pressed first
     bool useTargetDistance = false;
@@ -96,131 +133,194 @@ void calculateStrongholdLocationWithDistance(double playerX, double playerZ, dou
         targetDistance = appState.calculatedDistance;
     }
 
-    // If we have a target distance from F4, find the exact location or closest cell
+    // Map to accumulate probabilities for each cell
+    std::map<const StrongholdCell*, double> cellProbabilities;
+    std::map<const StrongholdCell*, std::vector<std::pair<double, double>>> cellProjections;
+
+    // Generate angle samples to account for uncertainty
+    std::vector<double> angleSamples = generateAngleSamples(eyeAngle);
+
+    // Generate distance samples if using F4
+    std::vector<double> distanceSamples;
     if (useTargetDistance) {
-        // Calculate the exact point at the target distance along the ray
-        double exactX = playerX + targetDistance * dx;
-        double exactZ = playerZ + targetDistance * dz;
-
-        // Find the closest stronghold cell to this exact point
-        double closestDistance = DBL_MAX;
-        StrongholdCell* closestCell = nullptr;
-        double bestClampedX = exactX;
-        double bestClampedZ = exactZ;
-
-        for (auto& cell : strongholdCells) {
-            // Find the closest point on this cell to the exact point
-            double clampedX = std::max(cell.xMin, std::min(cell.xMax, exactX));
-            double clampedZ = std::max(cell.zMin, std::min(cell.zMax, exactZ));
-
-            double distanceToCell = std::sqrt(
-                std::pow(clampedX - exactX, 2) + std::pow(clampedZ - exactZ, 2)
-            );
-
-            if (distanceToCell < closestDistance) {
-                closestDistance = distanceToCell;
-                closestCell = &cell;
-                bestClampedX = clampedX;
-                bestClampedZ = clampedZ;
-            }
-        }
-
-        StrongholdCandidate candidate;
-
-        // If closest cell is within 50 blocks, snap to cell boundary
-        if (closestCell && closestDistance <= 50.0) {
-            candidate.projectionX = (int)std::round(bestClampedX);
-            candidate.projectionZ = (int)std::round(bestClampedZ);
-            candidate.cellCenterX = closestCell->centerX;
-            candidate.cellCenterZ = closestCell->centerZ;
-            candidate.rawProb = closestCell->prob;
-            candidate.distanceFromOrigin = (int)std::round(closestCell->distance);
-            candidate.distanceRange = closestCell->distanceRange;
-
-            std::wstringstream ss;
-            ss << L"(" << (int)closestCell->xMin << L", " << (int)closestCell->zMin
-                << L") to (" << (int)closestCell->xMax << L", " << (int)closestCell->zMax << L")";
-            candidate.bounds = ss.str();
-        }
-        else {
-            // More than 50 blocks away, use exact F4 distance point
-            candidate.projectionX = (int)std::round(exactX);
-            candidate.projectionZ = (int)std::round(exactZ);
-            candidate.cellCenterX = exactX;
-            candidate.cellCenterZ = exactZ;
-            candidate.rawProb = 0.1; // Default probability for non-cell locations
-            candidate.distanceFromOrigin = (int)std::round(targetDistance);
-            candidate.distanceRange = (int)std::round(targetDistance / 100) * 100; // Round to nearest 100
-            candidate.bounds = L"Exact F4 distance point";
-        }
-
-        candidate.netherX = (int)std::round(candidate.projectionX / 8.0);
-        candidate.netherZ = (int)std::round(candidate.projectionZ / 8.0);
-        candidate.conditionalProb = 1.0; // 100% since F4 gives exact distance
-        candidate.distance = (int)std::round(targetDistance);
-
-        strongholdCandidates.push_back(candidate);
+        distanceSamples = generateDistanceSamples(targetDistance);
     }
     else {
-        // Original logic for when no F4 distance is available
-        for (const auto& cell : strongholdCells) {
-            double toCenterX = cell.centerX - playerX;
-            double toCenterZ = cell.centerZ - playerZ;
-            double t = (toCenterX * dx + toCenterZ * dz);
+        distanceSamples.push_back(0); // Placeholder for non-F4 case
+    }
 
-            if (t > 0) {
-                double projectionX = playerX + t * dx;
-                double projectionZ = playerZ + t * dz;
+    // Process each combination of angle and distance samples
+    for (double angleTest : angleSamples) {
+        double angleRad = angleTest * M_PI / 180.0;
+        double dx = std::sin(angleRad);
+        double dz = -std::cos(angleRad);
 
-                if (projectionX >= cell.xMin && projectionX <= cell.xMax &&
-                    projectionZ >= cell.zMin && projectionZ <= cell.zMax) {
+        // Weight for this angle sample
+        double angleWeight = gaussianProbability(angleTest, eyeAngle, ANGLE_STD_DEV);
 
-                    double distanceToProjection = std::sqrt(
-                        std::pow(projectionX - playerX, 2) +
-                        std::pow(projectionZ - playerZ, 2)
+        if (useTargetDistance) {
+            // F4 case: test multiple distance samples
+            for (double distanceTest : distanceSamples) {
+                double distanceWeight = gaussianProbability(distanceTest, targetDistance, F4_DISTANCE_STD_DEV);
+                double combinedWeight = angleWeight * distanceWeight;
+
+                // Calculate the point at this distance along this ray FROM THE EYE START POSITION
+                double exactX = eyeStartX + distanceTest * dx;
+                double exactZ = eyeStartZ + distanceTest * dz;
+
+                // Check all cells for intersection or proximity
+                for (auto& cell : strongholdCells) {
+                    // Find the closest point on this cell to the exact point
+                    double clampedX = std::max(cell.xMin, std::min(cell.xMax, exactX));
+                    double clampedZ = std::max(cell.zMin, std::min(cell.zMax, exactZ));
+
+                    double distanceToCell = std::sqrt(
+                        std::pow(clampedX - exactX, 2) + std::pow(clampedZ - exactZ, 2)
                     );
 
-                    double clampedX = std::max(cell.xMin, std::min(cell.xMax, projectionX));
-                    double clampedZ = std::max(cell.zMin, std::min(cell.zMax, projectionZ));
+                    // Allow up to 50 blocks deviation from F4 distance
+                    if (distanceToCell <= 50.0) {
+                        const StrongholdCell* cellPtr = &cell;
+                        if (cellProbabilities.count(cellPtr) > 0) {
+                            cellProbabilities[cellPtr] += combinedWeight * cell.prob;
+                        }
+                        else {
+                            cellProbabilities[cellPtr] = combinedWeight * cell.prob;
+                        }
+                        cellProjections[cellPtr].push_back({ clampedX, clampedZ });
+                    }
+                }
 
-                    StrongholdCandidate candidate;
-                    candidate.projectionX = (int)std::round(clampedX);
-                    candidate.projectionZ = (int)std::round(clampedZ);
-                    candidate.netherX = (int)std::round(clampedX / 8.0);
-                    candidate.netherZ = (int)std::round(clampedZ / 8.0);
-                    candidate.cellCenterX = cell.centerX;
-                    candidate.cellCenterZ = cell.centerZ;
-                    candidate.rawProb = cell.prob;
-                    candidate.distance = (int)std::round(distanceToProjection);
-                    candidate.distanceFromOrigin = (int)std::round(cell.distance);
-                    candidate.distanceRange = cell.distanceRange;
+                // Also consider exact F4 points that don't hit any cell
+                bool hitAnyCell = false;
+                for (const auto& cell : strongholdCells) {
+                    double clampedX = std::max(cell.xMin, std::min(cell.xMax, exactX));
+                    double clampedZ = std::max(cell.zMin, std::min(cell.zMax, exactZ));
+                    double distanceToCell = std::sqrt(
+                        std::pow(clampedX - exactX, 2) + std::pow(clampedZ - exactZ, 2)
+                    );
+                    if (distanceToCell <= 50.0) {
+                        hitAnyCell = true;
+                        break;
+                    }
+                }
 
-                    std::wstringstream ss;
-                    ss << L"(" << (int)cell.xMin << L", " << (int)cell.zMin
-                        << L") to (" << (int)cell.xMax << L", " << (int)cell.zMax << L")";
-                    candidate.bounds = ss.str();
+                // If no cell was hit, add as standalone candidate
+                if (!hitAnyCell) {
+                    // Create a virtual "cell" for non-cell locations
+                    static std::vector<StrongholdCell> virtualCells;
+                    StrongholdCell virtualCell;
+                    virtualCell.centerX = exactX;
+                    virtualCell.centerZ = exactZ;
+                    virtualCell.xMin = exactX - 1;
+                    virtualCell.xMax = exactX + 1;
+                    virtualCell.zMin = exactZ - 1;
+                    virtualCell.zMax = exactZ + 1;
+                    virtualCell.prob = 0.05; // Lower probability for non-cell locations
+                    virtualCell.distance = std::sqrt(exactX * exactX + exactZ * exactZ);
+                    virtualCell.distanceRange = (int)std::round(virtualCell.distance / 100) * 100;
 
-                    strongholdCandidates.push_back(candidate);
+                    virtualCells.push_back(virtualCell);
+                    const StrongholdCell* virtualPtr = &virtualCells.back();
+                    cellProbabilities[virtualPtr] = combinedWeight * virtualCell.prob;
+                    cellProjections[virtualPtr].push_back({ exactX, exactZ });
                 }
             }
         }
+        else {
+            // Non-F4 case: ray-casting logic with angle uncertainty, but from eye start position
+            for (const auto& cell : strongholdCells) {
+                double toCenterX = cell.centerX - eyeStartX;
+                double toCenterZ = cell.centerZ - eyeStartZ;
+                double t = (toCenterX * dx + toCenterZ * dz);
 
-        // Calculate conditional probabilities for non-F4 case
-        double totalRawProb = 0.0;
-        for (const auto& candidate : strongholdCandidates) {
-            totalRawProb += candidate.rawProb;
-        }
+                if (t > 0) {
+                    double projectionX = eyeStartX + t * dx;
+                    double projectionZ = eyeStartZ + t * dz;
 
-        if (totalRawProb > 0) {
-            for (auto& candidate : strongholdCandidates) {
-                candidate.conditionalProb = candidate.rawProb / totalRawProb;
+                    if (projectionX >= cell.xMin && projectionX <= cell.xMax &&
+                        projectionZ >= cell.zMin && projectionZ <= cell.zMax) {
+
+                        double clampedX = std::max(cell.xMin, std::min(cell.xMax, projectionX));
+                        double clampedZ = std::max(cell.zMin, std::min(cell.zMax, projectionZ));
+
+                        const StrongholdCell* cellPtr = &cell;
+                        if (cellProbabilities.count(cellPtr) > 0) {
+                            cellProbabilities[cellPtr] += angleWeight * cell.prob;
+                        }
+                        else {
+                            cellProbabilities[cellPtr] = angleWeight * cell.prob;
+                        }
+                        cellProjections[cellPtr].push_back({ clampedX, clampedZ });
+                    }
+                }
             }
         }
-
-        // Sort by conditional probability (highest first)
-        std::sort(strongholdCandidates.begin(), strongholdCandidates.end(),
-            [](const StrongholdCandidate& a, const StrongholdCandidate& b) {
-                return a.conditionalProb > b.conditionalProb;
-            });
     }
+
+    // Convert accumulated probabilities to candidates
+    for (const auto& pair : cellProbabilities) {
+        const StrongholdCell* cell = pair.first;
+        double accumulatedProb = pair.second;
+
+        if (accumulatedProb > 0 && cellProjections.count(cell) > 0 && !cellProjections.at(cell).empty()) {
+            // Average the projection points
+            double avgX = 0, avgZ = 0;
+            const auto& projections = cellProjections.at(cell);
+            for (const auto& projection : projections) {
+                avgX += projection.first;
+                avgZ += projection.second;
+            }
+            avgX /= projections.size();
+            avgZ /= projections.size();
+
+            // Calculate distance from PLAYER position to projection (for display purposes)
+            double distanceToProjection = std::sqrt(
+                std::pow(avgX - playerX, 2) + std::pow(avgZ - playerZ, 2)
+            );
+
+            StrongholdCandidate candidate;
+            candidate.projectionX = (int)std::round(avgX);
+            candidate.projectionZ = (int)std::round(avgZ);
+            candidate.netherX = (int)std::round(avgX / 8.0);
+            candidate.netherZ = (int)std::round(avgZ / 8.0);
+            candidate.cellCenterX = cell->centerX;
+            candidate.cellCenterZ = cell->centerZ;
+            candidate.rawProb = accumulatedProb;
+            candidate.distance = (int)std::round(distanceToProjection);
+            candidate.distanceFromOrigin = (int)std::round(cell->distance);
+            candidate.distanceRange = cell->distanceRange;
+
+            if (cell->xMin == cell->centerX - 1 && cell->xMax == cell->centerX + 1) {
+                // Virtual cell (exact F4 point)
+                candidate.bounds = L"Exact F4 distance point";
+            }
+            else {
+                std::wstringstream ss;
+                ss << L"(" << (int)cell->xMin << L", " << (int)cell->zMin
+                    << L") to (" << (int)cell->xMax << L", " << (int)cell->zMax << L")";
+                candidate.bounds = ss.str();
+            }
+
+            strongholdCandidates.push_back(candidate);
+        }
+    }
+
+    // Calculate conditional probabilities
+    double totalRawProb = 0.0;
+    for (const auto& candidate : strongholdCandidates) {
+        totalRawProb += candidate.rawProb;
+    }
+
+    if (totalRawProb > 0) {
+        for (auto& candidate : strongholdCandidates) {
+            candidate.conditionalProb = candidate.rawProb / totalRawProb;
+        }
+    }
+
+    // Sort by conditional probability (highest first)
+    std::sort(strongholdCandidates.begin(), strongholdCandidates.end(),
+        [](const StrongholdCandidate& a, const StrongholdCandidate& b) {
+            return a.conditionalProb > b.conditionalProb;
+        });
 }
