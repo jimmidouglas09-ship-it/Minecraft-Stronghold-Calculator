@@ -592,7 +592,7 @@ LRESULT CALLBACK OverlayProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
         }
         else if (capturePhase == 2 && !strongholdCandidates.empty()) {
             std::wstringstream ss;
-            ss << L"Direction: " << std::fixed << std::setprecision(1) << lastAngle << L"°";
+            ss << L"Direction: " << std::fixed << std::setprecision(1) << lastAngle << L"Â°";
             graphics.DrawString(ss.str().c_str(), -1, &infoFont,
                 PointF((REAL)x, (REAL)y), &lightGrayBrush);
             y += 25;
@@ -802,7 +802,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                         }
                     }
                     else {
-                        ss << L"Angle: " << lastAngle << L"° - No strongholds found";
+                        ss << L"Angle: " << lastAngle << L"Â° - No strongholds found";
                     }
                     std::wstring text = ss.str();
 
@@ -935,7 +935,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         else if (capturePhase == 2) {
             std::wstringstream angleSS;
             angleSS << L"Eye Direction: " << std::fixed << std::setprecision(1)
-                << lastAngle << L"°\n";
+                << lastAngle << L"Â°\n";
 
             if (!strongholdCandidates.empty()) {
                 angleSS << L"\nStronghold Locations (Overworld / Nether):";
