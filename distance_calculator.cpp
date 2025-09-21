@@ -30,7 +30,7 @@ void handleDistanceKey() {
 
     // Calculate distance: 3655 / (presses / 2)
     double divisor = appState.distanceKeyPresses / 2.0;
-    appState.calculatedDistance = 3655.0 / divisor;
+    appState.calculatedDistance = 3655 / divisor;
 
     UpdateOverlay();
 }
