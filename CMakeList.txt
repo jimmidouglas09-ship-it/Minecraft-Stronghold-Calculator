@@ -1,0 +1,34 @@
+cmake_minimum_required(VERSION 3.16)
+project(StrongholdCalculator)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Add executable
+add_executable(StrongholdCalculator
+    main.cpp
+    MouseTracker.cpp
+    CoordinateReader.cpp
+    StrongholdCalculator.cpp
+    AppController.cpp
+    UIRenderer.cpp
+    WindowProc.cpp
+)
+
+# Link libraries
+target_link_libraries(StrongholdCalculator
+    gdiplus
+    user32
+    gdi32
+)
+
+# Set subsystem to Windows (GUI application)
+if(WIN32)
+    set_target_properties(StrongholdCalculator PROPERTIES
+        WIN32_EXECUTABLE TRUE
+        LINK_FLAGS "/SUBSYSTEM:WINDOWS"
+    )
+endif()
+
+# Include directories (if headers are in subdirectories)
+target_include_directories(StrongholdCalculator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
