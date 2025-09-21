@@ -1,3 +1,3 @@
-# Video Tutorial: https://youtu.be/YfDJGfB7ulM?si=YjNgIupgSxAatkFJ
+# v.1.1.0 dev
 
-Discord for help, feedback and collaboration: https://discord.gg/yjfQxwq3cx
+Trying to track mouse movement for precise angle measurement.
