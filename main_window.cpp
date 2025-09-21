@@ -221,42 +221,69 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             HWND mcHwnd = FindWindow(NULL, L"Minecraft");
             if (mcHwnd && GetShownCoordinates(mcHwnd, &appState.latestCoords)) {
                 if (appState.capturePhase == 0) {
-                    // First press - only mark as direction first if distance wasn't pressed yet
-                    if (appState.distanceKeyPresses == 0) {
-                        appState.tabPressedFirst = true;
-                        ShowOverlay(); // Show overlay when direction key is first pressed
-                    }
+                    // First press - capture position before moving
                     appState.coord1 = appState.latestCoords;
                     appState.capturePhase = 1;
+                    ShowOverlay(); // Show overlay when starting
                 }
                 else if (appState.capturePhase == 1) {
+                    // Second press - capture position before eye throw
                     appState.coord2 = appState.latestCoords;
-                    appState.lastAngle = angleBetween(appState.coord1.x, appState.coord1.z,
-                        appState.coord2.x, appState.coord2.z);
                     appState.capturePhase = 2;
 
-                    // Always use distance when distance key was pressed first
-                    double targetDistance = -1;
-                    if (appState.f4PressedFirst && appState.calculatedDistance > 0) {
-                        targetDistance = appState.calculatedDistance;
+                    // Calculate distance moved between positions
+                    double deltaX = appState.coord2.x - appState.coord1.x;
+                    double deltaZ = appState.coord2.z - appState.coord1.z;
+                    appState.distanceMoved = std::sqrt(deltaX * deltaX + deltaZ * deltaZ);
+                }
+                else if (appState.capturePhase == 2) {
+                    // Third press - capture final direction after eye throw
+                    appState.coord3 = appState.latestCoords;
+                    appState.capturePhase = 3;
+
+                    // Calculate angle from second position to final direction
+                    appState.lastAngle = angleBetween(appState.coord2.x, appState.coord2.z,
+                        appState.coord3.x, appState.coord3.z);
+
+                    // Calculate distance using F4 pixel count and movement distance
+                    // Formula: 186 * distance_moved / f4_pixel_count
+                    if (appState.distanceKeyPresses > 0 && appState.distanceMoved > 0) {
+                        double pixelCount = appState.distanceKeyPresses / 2.0; // F4 system: divide by 2
+                        appState.calculatedDistance = 186.0 * appState.distanceMoved / pixelCount;
+                        appState.hasCalculatedDistance = true;
                     }
-                    calculateStrongholdLocationWithDistance(appState.coord1.x, appState.coord1.z,
-                        appState.lastAngle, targetDistance);
+                    else if (appState.distanceMoved == 0) {
+                        appState.calculatedDistance = 0.0;
+                        appState.hasCalculatedDistance = false;
+                        appState.distanceValidationFailed = true;
+                        appState.validationErrorMessage = L"No movement detected between positions";
+                    }
+                    else {
+                        appState.calculatedDistance = 0.0;
+                        appState.hasCalculatedDistance = false;
+                        appState.distanceValidationFailed = true;
+                        appState.validationErrorMessage = L"No F4 pixel count - press F4 after throwing eye";
+                    }
+
+                    // Calculate stronghold location with the calculated distance
+                    calculateStrongholdLocationWithDistance(appState.coord2.x, appState.coord2.z,
+                        appState.lastAngle, appState.calculatedDistance);
 
                     // Copy results to clipboard
                     CopyStrongholdResultsToClipboard();
                 }
                 else {
-                    // Third press resets everything
+                    // Fourth press resets everything
                     appState.capturePhase = 0;
                     appState.coord1 = { 0, 0, 0 };
                     appState.coord2 = { 0, 0, 0 };
+                    appState.coord3 = { 0, 0, 0 };
                     appState.lastAngle = 0.0;
-                    appState.distanceKeyPresses = 0;
+                    appState.distanceMoved = 0.0;
                     appState.calculatedDistance = 0.0;
+                    appState.hasCalculatedDistance = false;
+                    appState.distanceKeyPresses = 0;
                     strongholdCandidates.clear();
-                    appState.tabPressedFirst = false;
-                    appState.f4PressedFirst = false;
                     appState.distanceValidationFailed = false;
                     appState.validationErrorMessage = L"";
                     HideOverlay(); // Hide overlay when resetting
@@ -266,7 +293,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 InvalidateRect(hWnd, NULL, TRUE);
             }
         }
-        else if (wParam == 2) { // Distance hotkey (formerly F4)
+        else if (wParam == 2) { // Distance hotkey (F4) - for pixel counting
             handleDistanceKey();
         }
     }
@@ -317,15 +344,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             PointF((REAL)marginX, (REAL)y), dirBrush);
         y += 20;
 
-        // Distance hotkey
+        // Distance hotkey (now unused)
         std::wstringstream distSS;
-        distSS << L"Distance Key: " << GetKeyName(currentF4Hotkey);
-        if (waitingForF4Hotkey) {
-            distSS << L" (Press new key...)";
-        }
-        SolidBrush* distKeyBrush = waitingForF4Hotkey ? &yellowBrush : &grayBrush;
+        distSS << L"Distance Key: " << GetKeyName(currentF4Hotkey) << L" (pixel count)";
         graphics.DrawString(distSS.str().c_str(), -1, &font,
-            PointF((REAL)marginX, (REAL)y), distKeyBrush);
+            PointF((REAL)marginX, (REAL)y), &grayBrush);
         y += 30;
 
         std::wstringstream ss;
@@ -338,23 +361,27 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
             PointF((REAL)marginX, (REAL)y), &grayBrush);
         y += 85;
 
-        // Distance info
-        if (appState.f4PressedFirst && appState.distanceKeyPresses > 0) {
-            std::wstringstream distInfoSS;
-            distInfoSS << GetKeyName(currentF4Hotkey) << L" Distance Calculation:\n"
-                << L"Key presses: " << appState.distanceKeyPresses << L"\n"
-                << L"Calculated distance: " << std::fixed << std::setprecision(0)
-                << appState.calculatedDistance << L" blocks\n";
-            graphics.DrawString(distInfoSS.str().c_str(), -1, &font,
+        // Show distance calculation info
+        if (appState.capturePhase >= 2 && appState.distanceMoved > 0) {
+            std::wstringstream moveSS;
+            moveSS << L"Movement Calculation:\n"
+                << L"Distance moved: " << std::fixed << std::setprecision(1)
+                << appState.distanceMoved << L" blocks\n";
+
+            if (appState.distanceKeyPresses > 0) {
+                double pixelCount = appState.distanceKeyPresses / 2.0;
+                moveSS << L"F4 pixel count: " << std::fixed << std::setprecision(1) << pixelCount << L"\n";
+            }
+
+            if (appState.hasCalculatedDistance && appState.calculatedDistance > 0) {
+                moveSS << L"Calculated distance: "
+                    << std::fixed << std::setprecision(0)
+                    << appState.calculatedDistance << L" blocks\n";
+            }
+
+            graphics.DrawString(moveSS.str().c_str(), -1, &font,
                 PointF((REAL)marginX, (REAL)y), &yellowBrush);
-            y += 55;
-        }
-        else if (appState.tabPressedFirst) {
-            std::wstringstream skipSS;
-            skipSS << GetKeyName(currentF4Hotkey) << L" key disabled (" << GetKeyName(currentTabHotkey) << L" was pressed first)\n";
-            graphics.DrawString(skipSS.str().c_str(), -1, &font,
-                PointF((REAL)marginX, (REAL)y), &grayBrush);
-            y += 20;
+            y += 75;
         }
 
         // Show validation error in main window
@@ -368,40 +395,41 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         }
 
         if (appState.capturePhase == 0) {
-            if (!appState.f4PressedFirst && !appState.tabPressedFirst) {
-                std::wstringstream instrSS;
-                instrSS << L"Instructions:\n"
-                    << L"1. Press " << GetKeyName(currentF4Hotkey) << L" multiple times for distance calculation\n"
-                    << L"2. Press " << GetKeyName(currentTabHotkey) << L" twice for direction calculation\n"
-                    << L"   (or press " << GetKeyName(currentTabHotkey) << L" first to skip distance)";
-                graphics.DrawString(instrSS.str().c_str(), -1, &font,
-                    PointF((REAL)marginX, (REAL)y), &whiteBrush);
-            }
-            else if (appState.tabPressedFirst) {
-                std::wstringstream skipInstrSS;
-                skipInstrSS << GetKeyName(currentTabHotkey) << L" pressed first - distance calculation skipped.\n"
-                    << L"Press " << GetKeyName(currentTabHotkey) << L" again for direction calculation.";
-                graphics.DrawString(skipInstrSS.str().c_str(), -1, &font,
-                    PointF((REAL)marginX, (REAL)y), &whiteBrush);
-            }
-            else if (appState.f4PressedFirst) {
-                std::wstringstream distInstrSS;
-                distInstrSS << L"Distance calculated! Now press " << GetKeyName(currentTabHotkey) << L" twice for direction.";
-                graphics.DrawString(distInstrSS.str().c_str(), -1, &font,
-                    PointF((REAL)marginX, (REAL)y), &greenBrush);
-            }
+            std::wstringstream instrSS;
+            instrSS << L"Instructions:\n"
+                << L"1. Press " << GetKeyName(currentTabHotkey) << L" at your current position\n"
+                << L"2. Move to different position, press " << GetKeyName(currentTabHotkey) << L" again\n"
+                << L"3. Throw eye, press " << GetKeyName(currentF4Hotkey) << L" for each pixel it moves\n"
+                << L"4. Press " << GetKeyName(currentTabHotkey) << L" again for final direction\n"
+                << L"   Distance = 186 * movement_distance / f4_pixel_count";
+            graphics.DrawString(instrSS.str().c_str(), -1, &font,
+                PointF((REAL)marginX, (REAL)y), &whiteBrush);
         }
         else if (appState.capturePhase == 1) {
             std::wstringstream firstSS;
             firstSS << L"First point captured: (" << appState.coord1.x << L", " << appState.coord1.z << L")\n"
-                << L"Press " << GetKeyName(currentTabHotkey) << L" at second point to calculate direction.";
+                << L"Move to a different position and press " << GetKeyName(currentTabHotkey) << L" again.";
             graphics.DrawString(firstSS.str().c_str(), -1, &font,
                 PointF((REAL)marginX, (REAL)y), &yellowBrush);
         }
         else if (appState.capturePhase == 2) {
+            std::wstringstream secondSS;
+            secondSS << L"Second point captured: (" << appState.coord2.x << L", " << appState.coord2.z << L")\n"
+                << L"Movement distance: " << std::fixed << std::setprecision(1) << appState.distanceMoved << L" blocks\n"
+                << L"Throw an eye, press " << GetKeyName(currentF4Hotkey) << L" for each pixel it moves,\n"
+                << L"then press " << GetKeyName(currentTabHotkey) << L" for final direction.";
+            graphics.DrawString(secondSS.str().c_str(), -1, &font,
+                PointF((REAL)marginX, (REAL)y), &yellowBrush);
+        }
+        else if (appState.capturePhase == 3) {
             std::wstringstream angleSS;
             angleSS << L"Eye Direction: " << std::fixed << std::setprecision(1)
                 << appState.lastAngle << L"°\n";
+
+            if (appState.hasCalculatedDistance) {
+                angleSS << L"Calculated Distance: " << std::fixed << std::setprecision(0)
+                    << appState.calculatedDistance << L" blocks\n";
+            }
 
             if (!strongholdCandidates.empty()) {
                 angleSS << L"\nStronghold Locations (Overworld / Nether):";
@@ -415,7 +443,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 PointF((REAL)marginX, (REAL)y), angleBrush);
 
             if (!strongholdCandidates.empty()) {
-                y += 55;
+                y += 75;
 
                 // Table header
                 graphics.DrawString(L"Rank  Overworld Coords    Nether Coords      Probability  Distance", -1, &smallFont,
